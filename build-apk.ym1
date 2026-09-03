@@ -1,0 +1,114 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project ZIP
+        run: |
+          mkdir -p extracted
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+          echo "ZIP file: $ZIP_FILE"
+          unzip -q "$ZIP_FILE" -d extracted
+
+      - name: Find main project
+        run: |
+          PACKAGE_FILE=$(find extracted -maxdepth 3 -name package.json -not -path "*/node_modules/*" | head -n 1)
+          APP_DIR=$(dirname "$PACKAGE_FILE")
+          echo "APP_DIR=$APP_DIR" >> $GITHUB_ENV
+          echo "Application directory: $APP_DIR"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: |
+          cd "$APP_DIR"
+          npm install
+
+      - name: Build web application
+        run: |
+          cd "$APP_DIR"
+          npm run build
+
+      - name: Prepare web assets
+        run: |
+          cd "$APP_DIR"
+          
+          # پیدا کردن پوشه build
+          BUILD_DIR=$(find . -type d -name "build" -o -name "dist" -o -name "out" | grep -v node_modules | head -n 1)
+          
+          echo "Build directory: $BUILD_DIR"
+          
+          if [ -z "$BUILD_DIR" ]; then
+            echo "ERROR: No build directory found!"
+            ls -la
+            exit 1
+          fi
+          
+          # ایجاد dist
+          rm -rf dist
+          mkdir -p dist
+          cp -R "$BUILD_DIR"/* dist/ 2>/dev/null || cp -R "$BUILD_DIR"/. dist/
+          
+          echo "dist contents:"
+          ls -la dist/
+          
+          if [ ! -f "dist/index.html" ]; then
+            echo "ERROR: index.html not found!"
+            exit 1
+          fi
+
+      - name: Create Capacitor configuration
+        run: |
+          cd "$APP_DIR"
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.xauusd.historicaltrader",
+            "appName": "XAUUSD Historical Trader",
+            "webDir": "dist"
+          }
+          EOF
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Capacitor
+        run: |
+          cd "$APP_DIR"
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+
+      - name: Add Android
+        run: |
+          cd "$APP_DIR"
+          npx cap add android || true
+
+      - name: Sync Android
+        run: |
+          cd "$APP_DIR"
+          npx cap sync android
+
+      - name: Build APK
+        run: |
+          cd "$APP_DIR/android"
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: XAUUSD-Historical-Trader-APK
+          path: |
+            **/android/app/build/outputs/apk/debug/*.apk
